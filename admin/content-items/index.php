@@ -5,7 +5,6 @@ header("Access-Control-Allow-Origin: http://localhost:3000");
 header("Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS");
 header("Access-Control-Allow-Headers: Content-Type");
 
-// Handle preflight OPTIONS request
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
     exit;
@@ -13,162 +12,93 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 $conn = getDbConnection();
 $id = $_GET['id'] ?? null;
+$chapterId = $_GET['chapter_id'] ?? null;
 
-// GET - Retrieve content items
+// GET content item(s)
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     if ($id) {
         $stmt = $conn->prepare("SELECT * FROM content_items WHERE id = ?");
         $stmt->bind_param("i", $id);
         $stmt->execute();
-        $result = $stmt->get_result();
-        
-        if ($result->num_rows === 0) {
-            http_response_code(404);
-            echo json_encode(['error' => 'Content item not found']);
-            exit;
-        }
-        
-        $contentItem = $result->fetch_assoc();
-        echo json_encode($contentItem);
-    } else {
-        $chapterId = $_GET['chapter_id'] ?? null;
-        
-        if (!$chapterId) {
-            http_response_code(400);
-            echo json_encode(['error' => 'Missing chapter_id parameter']);
-            exit;
-        }
-        
+        echo json_encode($stmt->get_result()->fetch_assoc());
+    } else if ($chapterId) {
         $stmt = $conn->prepare("SELECT * FROM content_items WHERE chapter_id = ? ORDER BY order_num ASC");
         $stmt->bind_param("i", $chapterId);
         $stmt->execute();
         $result = $stmt->get_result();
-        
-        $contentItems = [];
+        $items = [];
         while ($row = $result->fetch_assoc()) {
-            $contentItems[] = $row;
+            $items[] = $row;
         }
-        
-        echo json_encode($contentItems);
+        echo json_encode($items);
+    } else {
+        http_response_code(400);
+        echo json_encode(['error' => 'Missing id or chapter_id']);
     }
 }
 
-// POST - Create a new content item
+// POST new content item
 else if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $data = json_decode(file_get_contents('php://input'), true);
-    
-    if (!isset($data['title']) || !isset($data['type']) || !isset($data['content']) || !isset($data['chapter_id'])) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Missing required fields']);
-        exit;
-    }
-    
-    $title = $data['title'];
-    $type = $data['type'];
-    $content = $data['content'];
-    $description = $data['description'] ?? '';
-    $chapterId = $data['chapter_id'];
-    $orderNum = $data['order_num'] ?? 1;
-    $duration = $data['duration'] ?? '';
-    
-    $stmt = $conn->prepare("INSERT INTO content_items (title, type, content, description, chapter_id, order_num, duration) VALUES (?, ?, ?, ?, ?, ?, ?)");
-    $stmt->bind_param("ssssiis", $title, $type, $content, $description, $chapterId, $orderNum, $duration);
-    
+    $data = json_decode(file_get_contents("php://input"), true);
+
+    $stmt = $conn->prepare("INSERT INTO content_items (chapter_id, title, type, content, description, duration, order_num) VALUES (?, ?, ?, ?, ?, ?, ?)");
+    $stmt->bind_param(
+        "isssssi",
+        $data['chapter_id'],
+        $data['title'],
+        $data['type'],
+        $data['content'],
+        $data['description'],
+        $data['duration'],
+        $data['order_num']
+    );
+
     if ($stmt->execute()) {
-        $newId = $conn->insert_id;
-        $result = $conn->query("SELECT * FROM content_items WHERE id = $newId");
-        $contentItem = $result->fetch_assoc();
-        echo json_encode($contentItem);
+        echo json_encode(['id' => $conn->insert_id]);
     } else {
         http_response_code(500);
         echo json_encode(['error' => 'Failed to create content item']);
     }
 }
 
-// PUT - Update an existing content item
+// PUT update
 else if ($_SERVER['REQUEST_METHOD'] === 'PUT' && $id) {
-    $data = json_decode(file_get_contents('php://input'), true);
-    
-    $updateFields = [];
-    $types = '';
-    $params = [];
-    
-    if (isset($data['title'])) {
-        $updateFields[] = "title = ?";
-        $types .= "s";
-        $params[] = $data['title'];
-    }
-    
-    if (isset($data['type'])) {
-        $updateFields[] = "type = ?";
-        $types .= "s";
-        $params[] = $data['type'];
-    }
-    
-    if (isset($data['content'])) {
-        $updateFields[] = "content = ?";
-        $types .= "s";
-        $params[] = $data['content'];
-    }
-    
-    if (isset($data['description'])) {
-        $updateFields[] = "description = ?";
-        $types .= "s";
-        $params[] = $data['description'];
-    }
-    
-    if (isset($data['order_num'])) {
-        $updateFields[] = "order_num = ?";
-        $types .= "i";
-        $params[] = $data['order_num'];
-    }
-    
-    if (isset($data['duration'])) {
-        $updateFields[] = "duration = ?";
-        $types .= "s";
-        $params[] = $data['duration'];
-    }
-    
-    if (empty($updateFields)) {
-        http_response_code(400);
-        echo json_encode(['error' => 'No fields to update']);
-        exit;
-    }
-    
-    $query = "UPDATE content_items SET " . implode(", ", $updateFields) . " WHERE id = ?";
-    $types .= "i";
-    $params[] = $id;
-    
-    $stmt = $conn->prepare($query);
-    $stmt->bind_param($types, ...$params);
-    
+    $data = json_decode(file_get_contents("php://input"), true);
+
+    $stmt = $conn->prepare("UPDATE content_items SET title = ?, type = ?, content = ?, description = ?, duration = ?, order_num = ? WHERE id = ?");
+    $stmt->bind_param(
+        "ssssssi",
+        $data['title'],
+        $data['type'],
+        $data['content'],
+        $data['description'],
+        $data['duration'],
+        $data['order_num'],
+        $id
+    );
+
     if ($stmt->execute()) {
-        $result = $conn->query("SELECT * FROM content_items WHERE id = $id");
-        $contentItem = $result->fetch_assoc();
-        echo json_encode($contentItem);
+        echo json_encode(['success' => true]);
     } else {
         http_response_code(500);
         echo json_encode(['error' => 'Failed to update content item']);
     }
 }
 
-// DELETE - Delete a content item
+// DELETE
 else if ($_SERVER['REQUEST_METHOD'] === 'DELETE' && $id) {
     $stmt = $conn->prepare("DELETE FROM content_items WHERE id = ?");
     $stmt->bind_param("i", $id);
-    
+
     if ($stmt->execute()) {
         echo json_encode(['success' => true]);
     } else {
         http_response_code(500);
         echo json_encode(['error' => 'Failed to delete content item']);
     }
-}
-
-else {
+} else {
     http_response_code(405);
     echo json_encode(['error' => 'Method not allowed']);
 }
 
 $conn->close();
-?>
